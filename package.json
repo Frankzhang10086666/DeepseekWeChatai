@@ -1,9 +1,8 @@
 {
-  "name": "wechat-deepseek-friend",
+  "name": "wechat-deepseek-bot",
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@wecom/crypto": "^1.0.1",
     "xml2js": "^0.6.2",
     "openai": "^4.24.0"
   }
