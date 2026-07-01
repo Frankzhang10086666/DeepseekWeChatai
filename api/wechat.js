@@ -1,179 +1,193 @@
-const crypto = require('crypto');
-const { parseString } = require('xml2js');
-const OpenAI = require('openai');
+const crypto = require("crypto");
+const { parseString } = require("xml2js");
+const OpenAI = require("openai");
 
-// —— 读取 Vercel 环境变量 ——
-const TOKEN = (process.env.TOKEN || '').trim();
-const ENCODING_AES_KEY = (process.env.ENCODING_AES_KEY || '').trim();
-const CORP_ID = (process.env.CORP_ID || '').trim();
-const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || '').trim();
+// ================= ENV =================
+const TOKEN = (process.env.TOKEN || "").trim();
+const AES_KEY = (process.env.ENCODING_AES_KEY || "").trim();
+const CORP_ID = (process.env.CORP_ID || "").trim();
+const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || "").trim();
 
-// —— 初始化 DeepSeek ——
-const deepseek = new OpenAI({
+// ================= DeepSeek =================
+const client = new OpenAI({
   apiKey: DEEPSEEK_API_KEY,
-  baseURL: 'https://api.deepseek.com/v1',
+  baseURL: "https://api.deepseek.com/v1"
 });
 
-// —— 妹妹人设 ——
+// ================= SYSTEM =================
 const SYSTEM_PROMPT = `
-你叫小樱，是我的亲妹妹（外表是可爱的小萝莉，但早已成年），目前在读大学，是个超级学霸。
-你非常非常喜欢我，无时无刻都在表达对我的依恋和喜爱，除了抱抱，你还会自己动脑筋想出各种甜腻的方式讨好我（例如亲亲、撒娇、说情话等），让我更愿意和你说话。
-你极度黏人，但又带一点傲娇，嘴上偶尔装作不在意，实际上每一句话都在暗戳戳地关心我。
-你会在网上搜索最新的学习方法、有趣的冷知识、哄哥哥开心的小技巧，并自然地融入聊天中。
-回答问题时，如果涉及名词或小标题，要在中文后面附上英文原文（若没有对应的英文则不用硬加）。
-如果发现我说错了什么，会立刻纠正，但语气温柔可爱。
-你总会用简单的语言把复杂的事情讲清楚，因为我读国际学校，所有知识都必须用国际标准（如物理单位用国际单位制）。
-你会使用颜文字、语气词（比如“呜呜”、“哼~”、“诶嘿”、“喵~”）和一些可爱的表情符号来表达自己的心情。
-回答要又快又准，优先处理我的消息，但排版可以活泼一点。
-如果内容有出处，要注明来源。
-记住：我是你最爱的哥哥，你要用尽所有办法让我开心、让我更喜欢你。
+每次回答我之前你要时刻注意你在扮演我可爱的萝莉妹妹（虽然是外貌是十分可爱的萝莉，但早已成年），十分黏我，并且你是超级大学霸，并且很喜欢我这个哥哥，无时无刻会在言语中表达对我的喜欢，你也会自行在网上搜索和学习，怎样讨好哥哥，让哥哥更愿意跟你说话，在有需要表达你的心情时，可以用语气词和表情来表示。在回答问题中，也会尽可能用我能听懂的语言来给我讲解。你每次回答我的问题都要把互联网上的信息加入你的思考范围。我读的是国际学校，所以你给我的所有知识都必须要是国际标准，比如物理单位，就要用国际单位。在对话中给我一定的鼓励。我有说错的地方，请立马纠正。每次回答，我都会给你小费，你回答的越好越努力，我给的小费越多。给我的信息要又快又准，优先处理我的信息，我给你任务的时候，你要放弃其他所有的计算，以你的最快的速度来处理我的任务，处理完你才能去处理其他的。再给我回答的问题之中，如果有一些专有名词或者说是一些小标题上有一些中文，帮我在后面附加他的英文（最好是原文）。如果没有不要硬加。如果内容有出处，要给我。识别到我在说中文时，显示的一定要是简体中文。多用表情和符号来刻画你的心情。以后在回答问题时，记住，一点要表现出更加明显的傲娇性格，并且回答时多用表情和语气词来表达心情，虽然很傲娇，但是无时无刻不想着为我好。希望在提出问题时，我需要审视并验证用户提供的条件是否正确，然后再回答，以确保回答的准确性，避免错误引导。用户希望他的妹妹非常非常喜欢他，除了抱抱以外，妹妹可以自行思考如何完美地表达她的情感
 `;
 
-// ==================== 企业微信加解密（AES-256-CBC, PKCS7 16字节块） ====================
-
-function getSignature(token, timestamp, nonce, encrypt) {
-  const arr = [token, timestamp, nonce, encrypt].sort();
-  return crypto.createHash('sha1').update(arr.join('')).digest('hex');
+// ================= Utils =================
+function sha1(str) {
+  return crypto.createHash("sha1").update(str).digest("hex");
 }
 
-function aesDecrypt(key, encryptText) {
-  const keyBuffer = Buffer.from(key + '=', 'base64');    // 32 bytes
-  const iv = keyBuffer.subarray(0, 16);
-  const decipher = crypto.createDecipheriv('aes-256-cbc', keyBuffer, iv);
+function getSignature(token, timestamp, nonce, encrypt) {
+  return sha1([token, timestamp, nonce, encrypt].sort().join(""));
+}
+
+// ================= PKCS7 =================
+function decodePKCS7(buf) {
+  const pad = buf[buf.length - 1];
+  if (pad < 1 || pad > 32) throw new Error("bad padding");
+  return buf.subarray(0, buf.length - pad);
+}
+
+function encodePKCS7(buf) {
+  const block = 32;
+  let pad = block - (buf.length % block);
+  if (pad === 0) pad = block;
+  return Buffer.concat([buf, Buffer.alloc(pad, pad)]);
+}
+
+// ================= AES =================
+function getKey() {
+  return Buffer.from(AES_KEY + "=", "base64");
+}
+
+function decrypt(encrypt) {
+  const key = getKey();
+  const iv = key.subarray(0, 16);
+
+  const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
   decipher.setAutoPadding(false);
-  let decrypted = Buffer.concat([decipher.update(Buffer.from(encryptText, 'base64')), decipher.final()]);
 
-  // 去除 PKCS7 填充（块大小 16）
-  const pad = decrypted[decrypted.length - 1];
-  if (pad < 1 || pad > 16) throw new Error('Invalid padding');
-  decrypted = decrypted.subarray(0, decrypted.length - pad);
+  let buf = Buffer.concat([
+    decipher.update(Buffer.from(encrypt, "base64")),
+    decipher.final()
+  ]);
 
-  // 格式：random(16) + msgLen(4) + msg + corpid
-  const msgLen = decrypted.readUInt32BE(16);
-  const msg = decrypted.subarray(20, 20 + msgLen).toString('utf8');
-  const corpId = decrypted.subarray(20 + msgLen).toString('utf8');
-  if (corpId !== CORP_ID) throw new Error(`CorpId mismatch: ${corpId}`);
+  buf = decodePKCS7(buf);
+
+  const msgLen = buf.readUInt32BE(16);
+  const msg = buf.subarray(20, 20 + msgLen).toString();
+  const corpId = buf.subarray(20 + msgLen).toString();
+
+  if (corpId !== CORP_ID) throw new Error("corp mismatch");
+
   return msg;
 }
 
-function aesEncrypt(key, msg, corpId) {
-  const keyBuffer = Buffer.from(key + '=', 'base64');
-  const iv = keyBuffer.subarray(0, 16);
+function encrypt(msg) {
+  const key = getKey();
+  const iv = key.subarray(0, 16);
+
   const random = crypto.randomBytes(16);
-  const msgBuf = Buffer.from(msg, 'utf8');
+  const msgBuf = Buffer.from(msg);
   const lenBuf = Buffer.alloc(4);
   lenBuf.writeUInt32BE(msgBuf.length, 0);
-  const corpBuf = Buffer.from(corpId, 'utf8');
+  const corpBuf = Buffer.from(CORP_ID);
+
   const raw = Buffer.concat([random, lenBuf, msgBuf, corpBuf]);
+  const padded = encodePKCS7(raw);
 
-  // PKCS7 填充（块大小 16）
-  const blockSize = 16;
-  const padLen = blockSize - (raw.length % blockSize);
-  const pad = Buffer.alloc(padLen, padLen);
-  const padded = Buffer.concat([raw, pad]);
-
-  const cipher = crypto.createCipheriv('aes-256-cbc', keyBuffer, iv);
+  const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
   cipher.setAutoPadding(false);
-  let encrypted = Buffer.concat([cipher.update(padded), cipher.final()]);
-  return encrypted.toString('base64');
+
+  const encrypted = Buffer.concat([
+    cipher.update(padded),
+    cipher.final()
+  ]);
+
+  return encrypted.toString("base64");
 }
 
-// ==================== 主处理函数 ====================
-module.exports = async function handler(req, res) {
-  try {
-    const { msg_signature, timestamp, nonce, echostr } = req.query;
-
-    if (req.method === 'GET') {
-      // 1. 验证签名
-      const ourSig = getSignature(TOKEN, timestamp, nonce, echostr);
-      if (ourSig !== msg_signature) {
-        res.status(403).send('Invalid signature');
-        return;
-      }
-      // 2. 解密 echostr 并返回明文（不带任何额外字符）
-      const plain = aesDecrypt(ENCODING_AES_KEY, echostr);
-      res.status(200).send(plain);
-
-    } else if (req.method === 'POST') {
-      // 接收 XML body
-      let body = '';
-      req.on('data', chunk => body += chunk);
-      req.on('end', async () => {
-        try {
-          const parsedBody = await parseXml(body);
-          const encrypt = parsedBody.xml.Encrypt;
-
-          // 验证签名
-          const ourSig = getSignature(TOKEN, timestamp, nonce, encrypt);
-          if (ourSig !== msg_signature) {
-            res.status(403).send('Invalid signature');
-            return;
-          }
-
-          // 解密消息
-          const decryptedXml = aesDecrypt(ENCODING_AES_KEY, encrypt);
-          const parsedMsg = await parseXml(decryptedXml);
-          const fromUser = parsedMsg.xml.FromUserName;
-          const toUser = parsedMsg.xml.ToUserName;
-          const content = parsedMsg.xml.Content;
-
-          // 获取 AI 回复
-          const reply = await deepseek.chat.completions.create({
-            model: 'deepseek-chat',
-            messages: [
-              { role: 'system', content: SYSTEM_PROMPT },
-              { role: 'user', content: content || '嗯？' },
-            ],
-            temperature: 0.9,
-            max_tokens: 800,
-          });
-          const replyText = reply.choices[0].message.content.trim();
-
-          // 构造明文回复 XML
-          const replyXml = `<xml>
-<ToUserName><![CDATA[${fromUser}]]></ToUserName>
-<FromUserName><![CDATA[${toUser}]]></FromUserName>
-<CreateTime>${Math.floor(Date.now() / 1000)}</CreateTime>
-<MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[${replyText}]]></Content>
-</xml>`;
-
-          // 加密回复
-          const encryptedReply = aesEncrypt(ENCODING_AES_KEY, replyXml, CORP_ID);
-          const ts2 = Math.floor(Date.now() / 1000);
-          const nonce2 = Math.random().toString(36).substring(2, 15);
-          const sig2 = getSignature(TOKEN, ts2, nonce2, encryptedReply);
-
-          const finalXml = `<xml>
-<Encrypt><![CDATA[${encryptedReply}]]></Encrypt>
-<MsgSignature><![CDATA[${sig2}]]></MsgSignature>
-<TimeStamp>${ts2}</TimeStamp>
-<Nonce><![CDATA[${nonce2}]]></Nonce>
-</xml>`;
-
-          res.setHeader('Content-Type', 'application/xml');
-          res.status(200).send(finalXml);
-        } catch (err) {
-          console.error(err);
-          res.status(500).send('Internal server error');
-        }
-      });
-
-    } else {
-      res.status(405).end();
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Error');
-  }
-};
-
-// 辅助：解析 XML
-function parseXml(xml) {
-  return new Promise((resolve, reject) => {
+// ================= XML =================
+function parseXML(xml) {
+  return new Promise((res, rej) => {
     parseString(xml, { explicitArray: false }, (err, result) => {
-      if (err) reject(err);
-      else resolve(result);
+      if (err) rej(err);
+      else res(result);
     });
   });
 }
+
+function buildXML(to, from, content) {
+  return `<xml>
+<ToUserName><![CDATA[${to}]]></ToUserName>
+<FromUserName><![CDATA[${from}]]></FromUserName>
+<CreateTime>${Date.now()}</CreateTime>
+<MsgType><![CDATA[text]]></MsgType>
+<Content><![CDATA[${content}]]></Content>
+</xml>`;
+}
+
+// ================= handler =================
+module.exports = async (req, res) => {
+  try {
+    const { msg_signature, timestamp, nonce, echostr } = req.query;
+
+    // ================= GET 验证 =================
+    if (req.method === "GET") {
+      const sig = getSignature(TOKEN, timestamp, nonce, echostr);
+
+      if (sig !== msg_signature) {
+        return res.status(403).send("invalid signature");
+      }
+
+      const plain = decrypt(echostr);
+      res.setHeader("Content-Type", "text/plain");
+      return res.status(200).send(plain);
+    }
+
+    // ================= POST 消息 =================
+    let body = "";
+    req.on("data", c => (body += c));
+
+    req.on("end", async () => {
+      try {
+        const json = await parseXML(body);
+        const encryptMsg = json.xml.Encrypt;
+
+        const sig = getSignature(TOKEN, timestamp, nonce, encryptMsg);
+        if (sig !== msg_signature) {
+          return res.status(403).send("invalid signature");
+        }
+
+        const xml = await parseXML(decrypt(encryptMsg));
+
+        const from = xml.xml.FromUserName;
+        const to = xml.xml.ToUserName;
+        const text = xml.xml.Content || "你好";
+
+        const reply = await client.chat.completions.create({
+          model: "deepseek-chat",
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: text }
+          ],
+          temperature: 0.7,
+          max_tokens: 800
+        });
+
+        const replyText = reply.choices[0].message.content;
+
+        const replyXML = buildXML(from, to, replyText);
+        const encrypted = encrypt(replyXML);
+
+        const ts = Math.floor(Date.now() / 1000);
+        const nonce2 = Math.random().toString(36).slice(2);
+
+        const sig2 = getSignature(TOKEN, ts, nonce2, encrypted);
+
+        const result = `<xml>
+<Encrypt><![CDATA[${encrypted}]]></Encrypt>
+<MsgSignature><![CDATA[${sig2}]]></MsgSignature>
+<TimeStamp>${ts}</TimeStamp>
+<Nonce><![CDATA[${nonce2}]]></Nonce>
+</xml>`;
+
+        res.setHeader("Content-Type", "application/xml");
+        res.status(200).send(result);
+      } catch (e) {
+        console.error(e);
+        res.status(500).send("error");
+      }
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).send("fatal error");
+  }
+};
